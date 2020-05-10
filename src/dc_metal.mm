@@ -113,10 +113,17 @@ void generate_field_compute(const uint N, bool use_low_power)
 
 
         const unsigned int len = N*N*N;
+
+
         //id<MTLBuffer> field_buffer = [device newBufferWithLength:(len * sizeof(SDF_Field_Entry)) options:MTLResourceStorageModeShared];
         //SDF_Field_Entry* field_data = (SDF_Field_Entry*)field_buffer.contents;
        	//memset(field_data, 0, len * sizeof(SDF_Field_Entry));
-       	id<MTLBuffer> field_buffer_out = [device newBufferWithLength:(len * sizeof(SDF_Field_Entry)) options:MTLResourceStorageModePrivate];
+       	#define DEBUG
+       	#ifdef DEBUG
+       	id<MTLBuffer> field_buffer = [device newBufferWithLength:(len * sizeof(SDF_Field_Entry)) options:MTLResourceStorageModeShared];
+       	#else
+       	id<MTLBuffer> field_buffer = [device newBufferWithLength:(len * sizeof(SDF_Field_Entry)) options:MTLResourceStorageModePrivate];
+       	#endif
        	//id<MTLBuffer> ubo = [device newBufferWithLength:(sizeof(SDF_Uniform_Buffer)) options:MTLResourceStorageModeShared];
 
         NSUInteger thread_group_max = init_field_pso.maxTotalThreadsPerThreadgroup;
@@ -142,21 +149,56 @@ void generate_field_compute(const uint N, bool use_low_power)
         );
         #endif
 
-        // call this 1000 times
+        // call this 3000 times for testing
         double times[3000];
-	
+
+        uint sdf_list_phase[512];
+        for (uint i = 0; i < 512; i += 1) {
+        	sdf_list_phase[i] = i;
+        }
+
+        struct SDF_Command_Info {
+        	uint len;
+        	uint phase_idx;
+        	SDF_COMPUTE_FUNCTION_TYPE cmd_types[256];
+        	id<MTLBuffer> sdf_args;
+        } sdf_cmd_info;
+
+        sdf_cmd_info.len = 1;
+        sdf_cmd_info.phase_idx = 0;
+        sdf_cmd_info.cmd_types[0] = SDF_COMPUTE_FUNCTION_TYPE::SPHERE;
+       	sdf_cmd_info.sdf_args = [device newBufferWithLength:(256 * sizeof(SDF_Command)) options:MTLResourceStorageModeShared];
+       	{
+       		SDF_Command* cmd_data = (SDF_Command*)sdf_cmd_info.sdf_args.contents;
+       		memset(cmd_data, 0, 256 * sizeof(SDF_Command));
+
+       		cmd_data->center = float4(0.0);
+       		cmd_data->args   = float4(0.0);
+       		cmd_data->args[0] = 1.0; 
+       	}
+
 		auto start_phase_1 = high_resolution_clock::now(); 
         for (uint i = 0; i < 3000; i += 1) {
+        	sdf_cmd_info.phase_idx = 0;
+
 	        // command buffer to send commands to GPU
 	        id<MTLCommandBuffer> cmd_buffer = [command_queue commandBuffer];
 
 	        id<MTLComputeCommandEncoder> compute_encoder = [cmd_buffer computeCommandEncoder];
 
-	        [compute_encoder setComputePipelineState:init_field_pso];
+	        [compute_encoder setComputePipelineState:
+	        	sdf_compute_info[
+	        		(uint16_t)sdf_cmd_info.cmd_types[sdf_cmd_info.phase_idx]
+	        	].pipeline
+	        ];
 	        //[compute_encoder setBuffer:field_buffer offset:0 atIndex:0];
-	        [compute_encoder setBuffer:field_buffer_out offset:0 atIndex:1];
+	        [compute_encoder setBuffer:field_buffer offset:0 atIndex:0];
+	        [compute_encoder setBuffer:sdf_cmd_info.sdf_args offset:0 atIndex:1];
 	        // for data < 4kb in size that are used once, best to use this function instead
-	        [compute_encoder setBytes:&N length: sizeof(uint) atIndex:2];
+	        [compute_encoder setBytes:&N length:sizeof(uint) atIndex:2];
+	        [compute_encoder setBytes:&sdf_list_phase[sdf_cmd_info.phase_idx] length:sizeof(uint) atIndex:3];
+
+			sdf_cmd_info.phase_idx += 1;
 
 
 	        // begin a GPU compute pass
@@ -210,14 +252,23 @@ void generate_field_compute(const uint N, bool use_low_power)
 	        // #endif
 
     	}
-		auto stop_phase_1  = high_resolution_clock::now(); 
+		auto stop_phase_1  = high_resolution_clock::now();
 
     	for (uint i = 0; i < 3000; i += 1) {
     		cout << "\tGPU Compute field gen time: " << times[i] << endl;
     	}
 
+
+		SDF_Field_Entry* check = (SDF_Field_Entry*)field_buffer.contents;
+		for (uint i = 0; i < N*N*N; i += 1) {
+			cout << "{" << endl;
+			SDF_Invoke_Debug_Print(&check->db);
+			cout << "}" << endl;
+		}
+
 		cout << "compute field time: " << duration_cast<milliseconds>(stop_phase_1 - start_phase_1).count() << endl;
 
+		cout << "------------------------------------------------" << endl;
 
 
 

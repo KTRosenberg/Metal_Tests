@@ -218,7 +218,9 @@ void closeField(Field& field)
 }
 
 
+#define METAL_DEBUG_PRINT_ON_CPU
 #include "dc_metal_types.h"
+#undef METAL_DEBUG_PRINT_ON_CPU
 #include "dc_metal.mm"
 
 Field generateField(unsigned fieldSize, bool subSphere, bool subCyl, bool use_low_power)

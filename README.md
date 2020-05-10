@@ -1,3 +1,5 @@
+The code is based on the wonderful example repo Dual Contouring example and is an attempt to convert it into a GPU-compute program. The original README is below:
+
 §Dual Contouring implementation in C++
 =====================================
 

@@ -217,8 +217,9 @@ void closeField(Field& field)
 	}
 }
 
-
+#define METAL_HOST_DEBUG
 #include "dc_metal_types.h"
+#undef METAL_HOST_DEBUG
 #include "dc_metal.mm"
 
 Field generateField(unsigned fieldSize, bool subSphere, bool subCyl, bool use_low_power)

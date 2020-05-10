@@ -1,4 +1,7 @@
-
+#define DEBUG
+#ifdef DEBUG
+#include <stdio.h>
+#endif
 
 void generate_field_compute(const uint N, bool use_low_power) 
 {
@@ -82,8 +85,10 @@ void generate_field_compute(const uint N, bool use_low_power)
 
         SDF_COMPUTE_INFO sdf_compute_info[(uint16_t)SDF_COMPUTE_FUNCTION_TYPE::ENUM_COUNT];
         for (uint16_t i = 0; i < (uint16_t)SDF_COMPUTE_FUNCTION_TYPE::ENUM_COUNT; i += 1) {
+   
         	sdf_compute_info[i].func = [
-        		shader_library newFunctionWithName:[NSString stringWithUTF8String:SDF_COMPUTE_FUNCTION_TYPE_TO_NAME[i]]
+        		shader_library newFunctionWithName:
+        			[NSString stringWithUTF8String:SDF_COMPUTE_FUNCTION_TYPE_TO_NAME[i]]
         	];
 			if (!sdf_compute_info[i].func) {
 	            NSLog(@"Failed to find the function.");
@@ -97,7 +102,7 @@ void generate_field_compute(const uint N, bool use_low_power)
 	            NSLog(@"Failed to create pipeline state object, error %@.", error);
 	            abort();
 	            return;
-	        }        		        
+	        }   		        
         }
 
 
@@ -116,8 +121,14 @@ void generate_field_compute(const uint N, bool use_low_power)
         //id<MTLBuffer> field_buffer = [device newBufferWithLength:(len * sizeof(SDF_Field_Entry)) options:MTLResourceStorageModeShared];
         //SDF_Field_Entry* field_data = (SDF_Field_Entry*)field_buffer.contents;
        	//memset(field_data, 0, len * sizeof(SDF_Field_Entry));
-       	id<MTLBuffer> field_buffer_out = [device newBufferWithLength:(len * sizeof(SDF_Field_Entry)) options:MTLResourceStorageModePrivate];
-       	//id<MTLBuffer> ubo = [device newBufferWithLength:(sizeof(SDF_Uniform_Buffer)) options:MTLResourceStorageModeShared];
+       	#define DEBUG
+       	#ifdef DEBUG
+       	FILE* write_out = fopen("log.txt", "w");
+       	id<MTLBuffer> field_buffer = [device newBufferWithLength:(len * sizeof(SDF_Field_Entry)) options:MTLResourceStorageModeShared];
+       	#else
+       	FILE* write_out = stdout;
+       	id<MTLBuffer> field_buffer = [device newBufferWithLength:(len * sizeof(SDF_Field_Entry)) options:MTLResourceStorageModePrivate];
+       	#endif       	//id<MTLBuffer> ubo = [device newBufferWithLength:(sizeof(SDF_Uniform_Buffer)) options:MTLResourceStorageModeShared];
 
         NSUInteger thread_group_max = init_field_pso.maxTotalThreadsPerThreadgroup;
         NSUInteger execution_width  = init_field_pso.threadExecutionWidth;
@@ -142,21 +153,51 @@ void generate_field_compute(const uint N, bool use_low_power)
         );
         #endif
 
-        // call this 1000 times
-        double times[3000];
+        const uint max_sdf_commands = 256;
+        struct SDF_Command_Info {
+        	uint len;
+        	SDF_COMPUTE_FUNCTION_TYPE cmd_types[max_sdf_commands];
+        	uint phase_idx;
+        	uint phase_ids[max_sdf_commands];
+        	id<MTLBuffer> cmds;
+        } sdf_cmd_info;
+        for (uint i = 0; i < max_sdf_commands; i += 1) {
+        	sdf_cmd_info.phase_ids[i] = i;
+        }
+        sdf_cmd_info.len = 1;
+        sdf_cmd_info.cmd_types[0] = SDF_COMPUTE_FUNCTION_TYPE::SPHERE;
+        sdf_cmd_info.cmds = [device newBufferWithLength:(max_sdf_commands * sizeof(SDF_Command)) options:MTLResourceStorageModeShared];
+       	{
+       		SDF_Command* cmd_data = (SDF_Command*)sdf_cmd_info.cmds.contents;
+       		memset(cmd_data, 0, max_sdf_commands * sizeof(SDF_Command));
+
+       		cmd_data->center = float4(0.0);
+       		cmd_data->args   = float4(0.0);
+       		cmd_data->args[0] = 70.0;
+       	}
+
+        const uint test_count = 1;
+        double times[test_count];
 	
+		
 		auto start_phase_1 = high_resolution_clock::now(); 
-        for (uint i = 0; i < 3000; i += 1) {
+        for (uint i = 0; i < test_count; i += 1) {
 	        // command buffer to send commands to GPU
 	        id<MTLCommandBuffer> cmd_buffer = [command_queue commandBuffer];
 
 	        id<MTLComputeCommandEncoder> compute_encoder = [cmd_buffer computeCommandEncoder];
 
+        	sdf_cmd_info.phase_idx = 0;
+
 	        [compute_encoder setComputePipelineState:init_field_pso];
 	        //[compute_encoder setBuffer:field_buffer offset:0 atIndex:0];
-	        [compute_encoder setBuffer:field_buffer_out offset:0 atIndex:1];
+	        [compute_encoder setBuffer:field_buffer offset:0 atIndex:0];
+	        [compute_encoder setBuffer:sdf_cmd_info.cmds offset:0 atIndex:1];	        
 	        // for data < 4kb in size that are used once, best to use this function instead
 	        [compute_encoder setBytes:&N length: sizeof(uint) atIndex:2];
+	        [compute_encoder setBytes:&sdf_cmd_info.phase_ids[sdf_cmd_info.phase_idx] length: sizeof(uint) atIndex:3];
+
+	        sdf_cmd_info.phase_idx += 1;
 
 
 	        // begin a GPU compute pass
@@ -183,7 +224,7 @@ void generate_field_compute(const uint N, bool use_low_power)
 	        // rough estimate of performance. Note this is only the first pass... and all I'm doing in
 	        // the shader is setting 2 fields to float4(1.0, 1.0, 1.0, 1.0)!
 	        times[i] = cmd_buffer.GPUEndTime - cmd_buffer.GPUStartTime;
-	       	// SDF_Field_Entry* field_data_out = (SDF_Field_Entry*)field_buffer_out.contents;
+	       	
 	        // #if 1
 
 	        // for (uint el = 0; el < len; el += 1) {
@@ -210,13 +251,47 @@ void generate_field_compute(const uint N, bool use_low_power)
 	        // #endif
 
     	}
-		auto stop_phase_1  = high_resolution_clock::now(); 
+		auto stop_phase_1  = high_resolution_clock::now();
 
-    	for (uint i = 0; i < 3000; i += 1) {
-    		cout << "\tGPU Compute field gen time: " << times[i] << endl;
+		uint* IDSx = (uint*)malloc(sizeof(uint)*N);
+		uint* IDSy = (uint*)malloc(sizeof(uint)*N);
+		uint* IDSz = (uint*)malloc(sizeof(uint)*N);
+		memset(IDSx, 0, sizeof(uint)*N);
+		memset(IDSy, 0, sizeof(uint)*N);
+		memset(IDSz, 0, sizeof(uint)*N);
+
+    	for (uint i = 0; i < test_count; i += 1) {
+    		fprintf(write_out, "\tGPU Compute field gen time: %f\n", times[i]);
+    		SDF_Field_Entry* field_data_out = (SDF_Field_Entry*)field_buffer.contents;
+    		for (uint e = 0; e < N*N*N; e += 1) {
+    			fprintf(write_out, "{\n");
+    			SDF_Field_Entry* entry = &field_data_out[e];
+    			SDF_Field_Entry_print_debug(entry, write_out);
+    			assert(entry->db.gid.x < N && entry->db.gid.y < N && entry->db.gid.z < N);
+    			IDSx[entry->db.gid.x] = 1;
+    			IDSy[entry->db.gid.y] = 1;
+    			IDSz[entry->db.gid.z] = 1;
+    			fprintf(write_out, "}\n");
+    		}
+    	}
+    	{
+    		for (uint e = 0; e < N; e += 1) {
+    			assert(IDSx[e] == 1);
+    		}
+    		for (uint e = 0; e < N; e += 1) {
+    			assert(IDSy[e] == 1);
+    		}
+    		for (uint e = 0; e < N; e += 1) {
+    			assert(IDSz[e] == 1);
+    		}
     	}
 
-		cout << "compute field time: " << duration_cast<milliseconds>(stop_phase_1 - start_phase_1).count() << endl;
+		fprintf(write_out, "compute field time: %llu\n", duration_cast<milliseconds>(stop_phase_1 - start_phase_1).count());
+
+		#ifdef DEBUG
+		fflush(write_out);
+		fclose(write_out);
+		#endif
 
 
 

@@ -44,9 +44,6 @@ kernel void init_field(device SDF_Field_Entry* field [[buffer (0)]],
 	field[IDX()].db.vec = vec;
 	field[IDX()].db.d   = d;
 
-    SDF_Distance(field[IDX()]) = 1;
-    SDF_Normal(field[IDX()]) = float3(index);
-
     // DEBUG
     field[IDX()].db.gid = index;
     field[IDX()].db.gid_as_float = float3(index.x, index.y, index.z);

@@ -23,6 +23,7 @@ struct alignas(16) SDF_Compute_Debug {
 	float3 vec;
 	float d;
 	uint check_passed;
+	uint address_of_log_buffer;
 };
 
 #define SDF_Normal(entry) entry.info.xyz
@@ -78,7 +79,8 @@ void SDF_Field_Entry_print_debug(SDF_Field_Entry* entry, FILE* fp)
 		"\tnorm:[%f,%f,%f]\n"
 		"\tvec:[%f,%f,%f]\n"
 		"\td:[%f]\n"
-		"\tcheck_passed:[%u]\n",
+		"\tcheck_passed:[%u]\n"
+		"\taddress_of_log_buffer:[%u]\n",
 		db->gid[0],db->gid[1],db->gid[2],
 		db->gid_as_float[0],db->gid_as_float[1],db->gid_as_float[2],
 		db->gid_flat,
@@ -89,7 +91,8 @@ void SDF_Field_Entry_print_debug(SDF_Field_Entry* entry, FILE* fp)
 		SDF_Normal((*entry))[0],SDF_Normal((*entry))[1],SDF_Normal((*entry))[2],
 		db->vec[0],db->vec[1],db->vec[2],
 		db->d,
-		db->check_passed
+		db->check_passed,
+		db->address_of_log_buffer
 	);
 }
 #endif

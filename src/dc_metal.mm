@@ -46,16 +46,16 @@ void generate_field_compute(const uint N, bool use_low_power)
 		}
 
 		// get the desired shader function from the library
-		id<MTLFunction> init_field_func = [shader_library newFunctionWithName:@"init_field"];
-		if (!init_field_func) {
+		id<MTLFunction> SDF_sphere_func = [shader_library newFunctionWithName:@"SDF_sphere"];
+		if (!SDF_sphere_func) {
             NSLog(@"Failed to find the function.");
             return;
         }
 
 
         // create a compute pipeline state object for the shader function
-       	id<MTLComputePipelineState> init_field_pso = [device newComputePipelineStateWithFunction: init_field_func error:&error];
-        if (!init_field_pso) {
+       	id<MTLComputePipelineState> SDF_sphere_pso = [device newComputePipelineStateWithFunction: SDF_sphere_func error:&error];
+        if (!SDF_sphere_pso) {
             //  If the Metal API validation is enabled, you can find out more information about what
             //  went wrong.  (Metal API validation is enabled by default when a debug build is run
             //  from Xcode)
@@ -125,18 +125,21 @@ void generate_field_compute(const uint N, bool use_low_power)
        	#ifdef DEBUG
        	FILE* write_out = fopen("log.txt", "w");
        	id<MTLBuffer> field_buffer = [device newBufferWithLength:(len * sizeof(SDF_Field_Entry)) options:MTLResourceStorageModeShared];
+       	memset(field_buffer.contents, 0, len * sizeof(SDF_Field_Entry));
+       	id<MTLBuffer> log_buffer = [device newBufferWithLength:(len*128) options:MTLResourceStorageModeShared];
+       	memset(log_buffer.contents, 0, len*128);
        	#else
        	FILE* write_out = stdout;
        	id<MTLBuffer> field_buffer = [device newBufferWithLength:(len * sizeof(SDF_Field_Entry)) options:MTLResourceStorageModePrivate];
        	#endif       	//id<MTLBuffer> ubo = [device newBufferWithLength:(sizeof(SDF_Uniform_Buffer)) options:MTLResourceStorageModeShared];
 
-        NSUInteger thread_group_max = init_field_pso.maxTotalThreadsPerThreadgroup;
-        NSUInteger execution_width  = init_field_pso.threadExecutionWidth;
+        NSUInteger thread_group_max = SDF_sphere_pso.maxTotalThreadsPerThreadgroup;
+        NSUInteger execution_width  = SDF_sphere_pso.threadExecutionWidth;
         NSUInteger ratio            = thread_group_max / execution_width;
 
         // radeon is 64, 4, 4 to get to 1024 (thread_group_max)
      	MTLSize threads_per_threadgroup = MTLSizeMake(execution_width, 4 * (64 / execution_width), 4);
-        NSLog(@"%@ %lu %@ %lu %@ %lu \n", @"maxTotalThreadsPerThreadgroup: ", thread_group_max, @"threadExecutionWidth: ", init_field_pso.threadExecutionWidth, @"ratio", ratio);
+        NSLog(@"%@ %lu %@ %lu %@ %lu \n", @"maxTotalThreadsPerThreadgroup: ", thread_group_max, @"threadExecutionWidth: ", SDF_sphere_pso.threadExecutionWidth, @"ratio", ratio);
 
         #define PER_GRID
         #ifdef PER_GRID
@@ -167,7 +170,8 @@ void generate_field_compute(const uint N, bool use_low_power)
         sdf_cmd_info.len = 1;
         sdf_cmd_info.cmd_types[0] = SDF_COMPUTE_FUNCTION_TYPE::SPHERE;
         sdf_cmd_info.cmds = [device newBufferWithLength:(max_sdf_commands * sizeof(SDF_Command)) options:MTLResourceStorageModeShared];
-       	{
+       	{ // TODO(Toby): need to look into proper initialization
+
        		SDF_Command* cmd_data = (SDF_Command*)sdf_cmd_info.cmds.contents;
        		memset(cmd_data, 0, max_sdf_commands * sizeof(SDF_Command));
 
@@ -179,7 +183,6 @@ void generate_field_compute(const uint N, bool use_low_power)
         const uint test_count = 1;
         double times[test_count];
 	
-		
 		auto start_phase_1 = high_resolution_clock::now(); 
         for (uint i = 0; i < test_count; i += 1) {
 	        // command buffer to send commands to GPU
@@ -187,27 +190,34 @@ void generate_field_compute(const uint N, bool use_low_power)
 
 	        id<MTLComputeCommandEncoder> compute_encoder = [cmd_buffer computeCommandEncoder];
 
-        	sdf_cmd_info.phase_idx = 0;
+	        // walk the SDF commands
+	        // TODO(Toby): need an initialization dispatch
 
-	        [compute_encoder setComputePipelineState:init_field_pso];
-	        //[compute_encoder setBuffer:field_buffer offset:0 atIndex:0];
 	        [compute_encoder setBuffer:field_buffer offset:0 atIndex:0];
 	        [compute_encoder setBuffer:sdf_cmd_info.cmds offset:0 atIndex:1];	        
 	        // for data < 4kb in size that are used once, best to use this function instead
 	        [compute_encoder setBytes:&N length: sizeof(uint) atIndex:2];
-	        [compute_encoder setBytes:&sdf_cmd_info.phase_ids[sdf_cmd_info.phase_idx] length: sizeof(uint) atIndex:3];
+	        for (sdf_cmd_info.phase_idx = 0; 
+	        	 sdf_cmd_info.phase_idx < sdf_cmd_info.len;
+	        	 sdf_cmd_info.phase_idx += 1) {
 
-	        sdf_cmd_info.phase_idx += 1;
+		        [compute_encoder setComputePipelineState:
+		        	sdf_compute_info[(uint16_t)sdf_cmd_info.cmd_types[sdf_cmd_info.phase_idx]].pipeline
+		        ];
 
-
-	        // begin a GPU compute pass
-
-	        // NOTE(Toby): This is where the compute parameters are used
-	        #ifdef PER_GRID
-	        [compute_encoder dispatchThreadgroups:threadgroups_per_grid threadsPerThreadgroup:threads_per_threadgroup];
-	   		#else
-	   		[compute_encoder dispatchThreads:threads_per_grid threadsPerThreadgroup:threads_per_threadgroup];
-	   		#endif
+		        [compute_encoder setBytes:&sdf_cmd_info.phase_ids[sdf_cmd_info.phase_idx] length: sizeof(uint) atIndex:3];
+		        #ifdef DEBUG
+		        memset(log_buffer.contents, 0, len*128);
+		        [compute_encoder setBuffer:log_buffer offset:0 atIndex:4];	        
+		        #endif
+		        #ifdef PER_GRID
+		        // more widely supported version
+		        [compute_encoder dispatchThreadgroups:threadgroups_per_grid threadsPerThreadgroup:threads_per_threadgroup];
+		   		#else
+		   		[compute_encoder dispatchThreads:threads_per_grid threadsPerThreadgroup:threads_per_threadgroup];
+		   		#endif
+	   		}
+	   		// TODO(Toby): need a finalization dispatch
 
 	        // must be called 
 			[compute_encoder endEncoding];
@@ -253,6 +263,7 @@ void generate_field_compute(const uint N, bool use_low_power)
     	}
 		auto stop_phase_1  = high_resolution_clock::now();
 
+		#ifdef DEBUG
 		uint* IDSx = (uint*)malloc(sizeof(uint)*N);
 		uint* IDSy = (uint*)malloc(sizeof(uint)*N);
 		uint* IDSz = (uint*)malloc(sizeof(uint)*N);
@@ -285,13 +296,47 @@ void generate_field_compute(const uint N, bool use_low_power)
     			assert(IDSz[e] == 1);
     		}
     	}
-
+    	#endif
+    	fprintf(stdout, "compute field time: %llu\n", duration_cast<milliseconds>(stop_phase_1 - start_phase_1).count());
 		fprintf(write_out, "compute field time: %llu\n", duration_cast<milliseconds>(stop_phase_1 - start_phase_1).count());
 
+		char* printing = (char*)log_buffer.contents;
+		for (uint i = 0; i < 128; i += 1) {
+			printf("%c", printing[i]);
+			if (printing[i] == '\0') {
+				break;
+				//printf("[%u]\n", i);
+				//abort();
+				//printf("\n|%u|%f\n", i, (double)i / 128.0);
+
+			}
+		}
 		#ifdef DEBUG
 		fflush(write_out);
 		fclose(write_out);
 		#endif
+
+		char bla[5];
+
+		bla[0] = 'y';
+		bla[1] = '?';
+		bla[2] = '?';
+		bla[3] = 'J';
+		bla[4] = '\0';
+	//	printf("%f\n", *((float*)bla));
+
+		float bla2 = 7889340.4598;
+		printf("\n%f\n", bla2);
+		int32_t bla2int;
+		memcpy(&bla2int, &bla2, 4);
+		{
+			bla[0] = bla2int         & 0xFF;
+			bla[1] = (bla2int >> 8)  & 0xFF;
+			bla[2] = (bla2int >> 16) & 0xFF;
+			bla[3] = (bla2int >> 24) & 0xFF;
+		}
+		printf("\n__%s__\n", bla);
+		printf("%f\n", *((float*)&bla));
 
 
 
